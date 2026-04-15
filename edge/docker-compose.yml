@@ -1,0 +1,10 @@
+version: "3.8"
+services:
+  ecosort-edge:
+    build: .
+    restart: always
+    devices:
+      - "/dev/video0:/dev/video0"
+    environment:
+      - API_URL=https://ecosort-ai-nine.vercel.app/api/v1/trash-events
+      - LIXEIRA_ID=smart_bin_01
