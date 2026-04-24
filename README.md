@@ -62,3 +62,73 @@ python main.py
 1. O script carregará o modelo NCNN (otimizado para Edge).
 2. Pressione ENTER para simular que um resíduo foi detetado.
 3. A IA classificará o objeto e enviará o JSON para a Vercel.
+
+# Teste no Raspberry Pi 4/5
+
+Guia de comandos para testar a aplicação em ambiente embarcado
+
+## Configurar o Docker
+
+### Instalar o Docker
+
+```bash
+curl -sSL https://get.docker.com | sh
+```
+### Dar permissões ao seu utilizador
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+### Aplicar as permissões
+
+```bash
+newgrp docker
+```
+
+## Execução
+
+### Voltar à pasta do projeto e rodar o comando build
+
+```bash
+cd ~/ecosort-ai/edge
+docker compose up -d --build
+```
+
+### Verificar os logs
+
+```bash
+docker compose logs -f
+```
+
+### Verificar a detecção da câmera
+
+```bash
+ls /dev/video*
+```
+Deve retornar /dev/video0 ou algo parecido
+
+## Para interagir com o terminal
+
+### Alterar o docker-compose
+```bash
+nano docker-compose.yml
+```
+```bash
+services:
+  ecosort-edge:
+    build: .
+    restart: always
+    stdin_open: true # Mantém o canal de texto aberto
+    tty: true        # Simula um terminal real
+    devices:
+      - "/dev/video0:/dev/video0"
+    environment:
+      # ... o resto do arquivo ...
+```
+### Interagir com o terminal
+
+```bash
+docker attach edge-ecosort-edge-1
+```
+
