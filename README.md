@@ -51,6 +51,13 @@ pip install -r requirements.txt
 
 Crie um arquivo .env na raiz da pasta `/edge` de acordo com o conteúdo do .env.example
 
+```bash
+cp .env.example .env
+```
+```bash
+nano .env
+```
+
 ### Execução
 
 Para iniciar a simulação da lixeira:
