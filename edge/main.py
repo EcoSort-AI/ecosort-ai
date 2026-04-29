@@ -62,6 +62,7 @@ def main():
         logger.critical(f"Failed to load YOLO model: {e}")
         sys.exit(1)
 
+    logger.info("Initializing real time camera...")
     cap = cv2.VideoCapture(CAMERA_INDEX)
     
     if not cap.isOpened():
@@ -72,18 +73,29 @@ def main():
 
     try:
         while True:
-            # NOTE: In production, change the input() to a GPIO sensor trigger
-            input("\n[SIMULATION] Press ENTER to trigger object detection...")
+            # In production, change the input() to a GPIO sensor trigger
+            # input("\n[SIMULATION] Press ENTER to trigger object detection...")
             
             ret, frame = cap.read()
             if not ret:
-                logger.warning("Failed to grab frame from camera.")
+                logger.warning("Failed to grab frame from camera. Retrying...")
                 continue
+
+            cv2.imshow("EcoSort Preview - Pressione 'C' para classificar", frame)
+
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == ord('q'):
+                logger.info("Encerrando o sistema a pedido do usuário...")
+                break
+            elif key == ord('c') or key == 13:
+                logger.info("Imagem capturada. Rodando inferência...")
+
+            results = model.predict(source=frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+            res = results[0]
                 
             logger.info("Image captured. Running inference...")
             
-            results = model.predict(source=frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
-            res = results[0]
             
             # Correção CRÍTICA: Avaliar 'probs' (Classificação) em vez de 'boxes' (Detecção)
             if res.probs is not None:

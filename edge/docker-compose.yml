@@ -3,8 +3,12 @@ services:
   ecosort-edge:
     build: .
     restart: always
-    # devices:
-    #   - "/dev/video0:/dev/video0"
+    network_mode: "host" # Necessário para comunicação fluída de tela
     environment:
+      - DISPLAY=${DISPLAY} # Passa a tela da Pi para o Docker
       - API_URL=https://ecosort-ai-nine.vercel.app/api/v1/trash-events
-      - LIXEIRA_ID=smart_bin_01
+      - BIN_ID=smart_bin_01
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    devices:
+      - "/dev/video0:/dev/video0"
