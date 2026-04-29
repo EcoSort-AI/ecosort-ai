@@ -43,7 +43,7 @@ def send_classification_to_api(class_name: str, confidence: float) -> None:
         response.raise_for_status()
         logger.info(f"Dados enviados à Vercel com sucesso! Status: {response.status_code}")
     except Exception as e:
-        logger.error(f"Erro ao enviar dados para a API: {e}")
+        logger.error(f"Erro ao enviar os dados para a API: {e}")
 
 def main():
     logger.info("Initializing EcoSort Headless Mode...")

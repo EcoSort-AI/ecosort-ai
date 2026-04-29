@@ -1,7 +1,8 @@
 version: "3.8"
 services:
   ecosort-edge:
-    build: .
+    image: pdec5504/ecosort-edge:latest
+    container_name: ecosort-edge
     restart: always
     stdin_open: true
     tty: true
@@ -19,3 +20,13 @@ services:
       - CAMERA_SOURCE=0
       - DISPLAY=:0
       - XAUTHORITY=/root/.Xauthority
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DOCKER_API_VERSION=1.41
+    command: --interval 60 --cleanup
