@@ -1,0 +1,6 @@
+venv/
+.venv/
+__pycache__/
+.git/
+*.pt
+!best_ncnn_model/

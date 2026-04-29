@@ -3,58 +3,55 @@ import sys
 import logging
 import cv2
 import requests
+import time
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from ultralytics import YOLO
-from requests.exceptions import RequestException
 
 load_dotenv()
 
-# --- CONFIGURATION (Environment Variables) ---
-API_URL = os.getenv("API_URL", "https://your-domain.vercel.app/api/classify")
+# --- CONFIGURAÇÕES ---
+API_URL = os.getenv("API_URL", "https://ecosort-ai-nine.vercel.app/api/v1/trash-events")
 BIN_ID = os.getenv("BIN_ID", "smart_bin_01")
-MODEL_PATH = os.getenv("MODEL_PATH", "best.pt")
-CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", 0))
+MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model")
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.6))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 5))
 
-# --- LOGGING SETUP ---
+camera_env = os.getenv("CAMERA_SOURCE", "0")
+CAMERA_SOURCE = int(camera_env) if camera_env.isdigit() else camera_env
+
+# --- ARQUIVO DE GATILHO (HEADLESS) ---
+# O Python vai procurar por este arquivo na pasta /app para classificar
+TRIGGER_FILE = "trigger.txt"
+
+# --- LOGS ---
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=logging.INFO, 
+    format="%(asctime)s [%(levelname)s] %(message)s", 
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
 def send_classification_to_api(class_name: str, confidence: float) -> None:
-    """
-    Sends the classification data to the web API.
-    """
     payload = {
         "bin_id": BIN_ID,
         "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
-        "detection": {
-            "class_name": class_name,
-            "confidence": round(confidence, 4)
-        }
+        "detection": {"class_name": class_name, "confidence": round(confidence, 4)}
     }
-    
     try:
         response = requests.post(API_URL, json=payload, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
-        logger.info(f"Successfully sent data to API. API Response: {response.status_code}")
-    except RequestException as e:
-        logger.error(f"Failed to send data to API. Error: {e}")
-        logger.error(f"Vercel error details: {e.response.text}")
-    except RequestException as e:
-        logger.error(f"Network error: {e}")
+        response.raise_for_status()
+        logger.info(f"Dados enviados à Vercel com sucesso! Status: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Erro ao enviar dados para a API: {e}")
 
 def main():
-    """
-    Main loop for the Smart Bin Edge AI.
-    """
-    logger.info("Initializing EcoSort Edge AI...")
+    logger.info("Initializing EcoSort Headless Mode...")
     
+    # Limpa gatilhos antigos se houver
+    if os.path.exists(TRIGGER_FILE):
+        os.remove(TRIGGER_FILE)
+        
     try:
         model = YOLO(MODEL_PATH, task="classify")
         logger.info(f"Model loaded successfully from {MODEL_PATH}")
@@ -63,59 +60,55 @@ def main():
         sys.exit(1)
 
     logger.info("Initializing real time camera...")
-    cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap = cv2.VideoCapture(CAMERA_SOURCE)
     
     if not cap.isOpened():
-        logger.critical(f"Error: Could not access camera at index {CAMERA_INDEX}.")
+        logger.critical(f"Erro ao ligar a câmara: {CAMERA_SOURCE}")
         sys.exit(1)
 
-    logger.info(f"Smart Bin '{BIN_ID}' is active and waiting for events...")
+    logger.info(f"Smart Bin '{BIN_ID}' is active.")
+    logger.info(f"==> Para classificar, rode este comando via SSH: touch {TRIGGER_FILE} <==")
 
     try:
         while True:
-            # In production, change the input() to a GPIO sensor trigger
-            # input("\n[SIMULATION] Press ENTER to trigger object detection...")
-            
             ret, frame = cap.read()
             if not ret:
-                logger.warning("Failed to grab frame from camera. Retrying...")
                 continue
-
-            cv2.imshow("EcoSort Preview - Pressione 'C' para classificar", frame)
-
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord('q'):
-                logger.info("Encerrando o sistema a pedido do usuário...")
-                break
-            elif key == ord('c') or key == 13:
-                logger.info("Imagem capturada. Rodando inferência...")
-
-            results = model.predict(source=frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
-            res = results[0]
                 
-            logger.info("Image captured. Running inference...")
+            # Exibe o vídeo (apenas para você assistir na tela)
+            cv2.imshow("EcoSort Preview (Headless Mode)", frame)
             
+            # Precisamos do waitKey para a janela não travar, mas ignoramos o teclado
+            cv2.waitKey(30)
             
-            # Correção CRÍTICA: Avaliar 'probs' (Classificação) em vez de 'boxes' (Detecção)
-            if res.probs is not None:
-                top_index = res.probs.top1
-                class_name = res.names[top_index]
-                confidence = float(res.probs.top1conf)
+            # --- O GATILHO VIRTUAL ---
+            # Se o arquivo trigger.txt existir, faz a classificação!
+            if os.path.exists(TRIGGER_FILE):
+                logger.info("Sinal SSH recebido! Iniciando classificação...")
                 
-                logger.info(f"Classification Result: {class_name.upper()} ({confidence:.2%} confidence)")
+                # Apaga imediatamente o gatilho para não entrar em loop (metralhadora)
+                os.remove(TRIGGER_FILE)
                 
-                send_classification_to_api(class_name, confidence)
-            else:
-                logger.warning("No classification result found for this frame.")
+                # Executa a inferência
+                results = model.predict(source=frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+                res = results[0]
+                
+                if res.probs is not None:
+                    top_index = res.probs.top1
+                    class_name = res.names[top_index]
+                    confidence = float(res.probs.top1conf)
+                    
+                    logger.info(f"Classification Result: {class_name.upper()} ({confidence:.2%} confidence)")
+                    send_classification_to_api(class_name, confidence)
+                else:
+                    logger.warning("Nenhum objeto reconhecido com confiança suficiente.")
 
     except KeyboardInterrupt:
-        logger.info("Shutdown signal received (KeyboardInterrupt).")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}")
+        logger.info("Shutdown signal received.")
     finally:
         logger.info("Releasing camera and shutting down...")
-        cap.release()
+        if cap is not None:
+            cap.release()
         cv2.destroyAllWindows()
         sys.exit(0)
 
