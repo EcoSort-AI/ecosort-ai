@@ -7,6 +7,12 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     v4l-utils \
     libxcb1 \
+    libxcb-xinerama0 \
+    libxcb-cursor0 \
+    libxkbcommon-x11-0 \
+    libsm6 \
+    libxext6 \
+    libxcursor1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

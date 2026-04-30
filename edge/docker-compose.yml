@@ -1,14 +1,32 @@
 version: "3.8"
 services:
   ecosort-edge:
-    build: .
+    image: pdec5504/ecosort-edge:latest
+    container_name: ecosort-edge
     restart: always
-    network_mode: "host" # Necessário para comunicação fluída de tela
-    environment:
-      - DISPLAY=${DISPLAY} # Passa a tela da Pi para o Docker
-      - API_URL=https://ecosort-ai-nine.vercel.app/api/v1/trash-events
-      - BIN_ID=smart_bin_01
+    stdin_open: true
+    tty: true
+    network_mode: "host"
+    privileged: true
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
+      - ~/.Xauthority:/root/.Xauthority:ro
+      - ./:/app
     devices:
       - "/dev/video0:/dev/video0"
+    environment:
+      - API_URL=https://ecosort-ai-nine.vercel.app/api/v1/trash-events
+      - BIN_ID=smart_bin_01
+      - CAMERA_SOURCE=0
+      - DISPLAY=:0
+      - XAUTHORITY=/root/.Xauthority
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DOCKER_API_VERSION=1.41
+    command: --interval 60 --cleanup
