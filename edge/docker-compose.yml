@@ -1,32 +1,36 @@
-version: "3.8"
 services:
   ecosort-edge:
     image: pdec5504/ecosort-edge:latest
     container_name: ecosort-edge
-    restart: always
-    stdin_open: true
-    tty: true
+    restart: unless-stopped
     network_mode: "host"
-    privileged: true
+    devices:
+      - "/dev/video0:/dev/video0"
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ~/.Xauthority:/root/.Xauthority:ro
-      - ./:/app
-    devices:
-      - "/dev/video0:/dev/video0"
+    env_file:
+      - .env
     environment:
-      - API_URL=https://ecosort-ai-nine.vercel.app/api/v1/trash-events
-      - BIN_ID=smart_bin_01
-      - CAMERA_SOURCE=0
       - DISPLAY=:0
       - XAUTHORITY=/root/.Xauthority
+    loggin:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower
-    restart: always
+    restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - DOCKER_API_VERSION=1.41
     command: --interval 60 --cleanup
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
