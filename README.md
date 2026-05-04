@@ -71,28 +71,6 @@ sudo usermod -aG docker $USER
 newgrp docker
 ```
 
-## Primeira Execução
-
-### Verificar a detecção da câmera
-
-```bash
-ls /dev/video*
-```
-Deve retornar /dev/video0 ou algo parecido
-
-### Voltar à pasta do projeto e rodar o comando build
-
-```bash
-cd ~/ecosort-ai/edge
-docker compose up -d --build
-```
-
-### Verificar os logs
-
-```bash
-docker compose logs -f
-```
-
 ## Execução via Docker Compose
 
 Inicie os serviços (a aplicação EcoSort e o Watchtower para atualizações automáticas) em segundo plano:
@@ -105,6 +83,12 @@ Para acompanhar os logs em tempo real e verificar se a câmera iniciou e o model
 ```bash
 docker compose logs -f ecosort-edge
 ```
+Verificar conexão com a câmera
+
+```bash
+ls /dev/video*
+```
+Deve retornar /dev/video0 ou algo parecido
 ## Iniciar as Detecções de Lixo
 
 Para futuras atualizações, a lixeira deve identificar automaticamente a presença de resíduos por meio de sensores. Enquanto isso, execute o passo a passo a seguir para iniciar as detecções:
