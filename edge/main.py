@@ -47,6 +47,7 @@ def send_classification_to_api(class_name: str, confidence: float) -> None:
 
 def main():
     logger.info("Initializing EcoSort Headless Mode...")
+    logger.info("Teste do Watchtower")
     
     # Limpa gatilhos antigos se houver
     if os.path.exists(TRIGGER_FILE):
