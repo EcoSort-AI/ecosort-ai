@@ -6,15 +6,18 @@ services:
     network_mode: "host"
     devices:
       - "/dev/video0:/dev/video0"
+    group_add:
+      - video
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ~/.Xauthority:/root/.Xauthority:ro
+      - ./:/app
     env_file:
       - .env
     environment:
       - DISPLAY=:0
       - XAUTHORITY=/root/.Xauthority
-    loggin:
+    logging:
       driver: "json-file"
       options:
         max-size: "10m"
