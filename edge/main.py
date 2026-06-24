@@ -10,7 +10,7 @@ from ultralytics import YOLO
 
 load_dotenv()
 
-# --- CONFIGURAÇÕES ---
+# --- CONFIGURATION ---
 API_URL = os.getenv("API_URL", "https://ecosort-ai-nine.vercel.app/api/v1/trash-events")
 BIN_ID = os.getenv("BIN_ID", "smart_bin_01")
 MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model")
@@ -20,8 +20,8 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 5))
 camera_env = os.getenv("CAMERA_SOURCE", "0")
 CAMERA_SOURCE = int(camera_env) if camera_env.isdigit() else camera_env
 
-# --- ARQUIVO DE GATILHO (HEADLESS) ---
-# O Python vai procurar por este arquivo na pasta /app para classificar
+# --- TRIGGER FILE (HEADLESS) ---
+# Python will look for this file in the /app folder to sort it
 TRIGGER_FILE = "trigger.txt"
 
 # --- LOGS ---
@@ -41,15 +41,14 @@ def send_classification_to_api(class_name: str, confidence: float) -> None:
     try:
         response = requests.post(API_URL, json=payload, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        logger.info(f"Dados enviados à Vercel com sucesso! Status: {response.status_code}")
+        logger.info(f"Data successfully sent to the backend. Status: {response.status_code}")
     except Exception as e:
-        logger.error(f"Erro ao enviar os dados para a API: {e}")
+        logger.error(f"Error sending data to the backend: {e}")
 
 def main():
     logger.info("Initializing EcoSort Headless Mode...")
-    logger.info("Teste do Watchtower")
+    logger.info("Watchtower Test")
     
-    # Limpa gatilhos antigos se houver
     if os.path.exists(TRIGGER_FILE):
         os.remove(TRIGGER_FILE)
         
@@ -64,7 +63,7 @@ def main():
     cap = cv2.VideoCapture(CAMERA_SOURCE)
     
     if not cap.isOpened():
-        logger.critical(f"Erro ao ligar a câmara: {CAMERA_SOURCE}")
+        logger.critical(f"Error connecting to the camera.: {CAMERA_SOURCE}")
         sys.exit(1)
 
     logger.info(f"Smart Bin '{BIN_ID}' is active.")
@@ -75,34 +74,44 @@ def main():
             ret, frame = cap.read()
             if not ret:
                 continue
+
+            # --- CROP METHOD ---
+            height, width, _ = frame.shape
+            fraction = 0.6
+            side = int(min(height, width) * fraction)
+            y_center, x_center = height // 2, width // 2
+
+            y_min = y_center - side // 2
+            x_min = x_center - side // 2
+
+            cropped_frame = frame[y_min:y_min + side, x_min:x_min + side]
+            # --- END OF CROP ---
                 
-            # Exibe o vídeo (apenas para você assistir na tela)
-            cv2.imshow("EcoSort Preview (Headless Mode)", frame)
-            
-            # Precisamos do waitKey para a janela não travar, mas ignoramos o teclado
+            cv2.imshow("EcoSort Preview (Headless Mode)", cropped_frame) # use cropped_frame instead of frame
+
             cv2.waitKey(30)
             
-            # --- O GATILHO VIRTUAL ---
-            # Se o arquivo trigger.txt existir, faz a classificação!
+            # --- VIRTUAL TRIGGER ---
             if os.path.exists(TRIGGER_FILE):
-                logger.info("Sinal SSH recebido! Iniciando classificação...")
-                
-                # Apaga imediatamente o gatilho para não entrar em loop (metralhadora)
+                logger.info("SSH signal received! Starting classification...")
                 os.remove(TRIGGER_FILE)
                 
-                # Executa a inferência
-                results = model.predict(source=frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+                results = model.predict(source=cropped_frame, conf=CONFIDENCE_THRESHOLD, verbose=False) # use cropped_frame instead of frame
                 res = results[0]
                 
                 if res.probs is not None:
                     top_index = res.probs.top1
                     class_name = res.names[top_index]
                     confidence = float(res.probs.top1conf)
-                    
-                    logger.info(f"Classification Result: {class_name.upper()} ({confidence:.2%} confidence)")
-                    send_classification_to_api(class_name, confidence)
+
+                    if confidence >= CONFIDENCE_THRESHOLD:
+                        logger.info(f"Classification Result: {class_name.upper()} ({confidence:.2%})")
+                        send_classification_to_api(class_name, confidence)
+                    else:
+                        logger.warning(f"inconclusive: {class_name} a {confidence:.2%} (below the threshold). Nothing sent.")
                 else:
-                    logger.warning("Nenhum objeto reconhecido com confiança suficiente.")
+                    logger.warning("No object recognized with sufficient confidence.")
+                    
 
     except KeyboardInterrupt:
         logger.info("Shutdown signal received.")
