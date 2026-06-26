@@ -11,7 +11,7 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ~/.Xauthority:/root/.Xauthority:ro
-      - ./:/app
+      # - ./:/app # removed to use the code embedded in the image
     env_file:
       - .env
     environment:

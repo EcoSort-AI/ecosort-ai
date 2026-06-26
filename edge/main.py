@@ -47,7 +47,6 @@ def send_classification_to_api(class_name: str, confidence: float) -> None:
 
 def main():
     logger.info("Initializing EcoSort Headless Mode...")
-    logger.info("Watchtower Test")
     
     if os.path.exists(TRIGGER_FILE):
         os.remove(TRIGGER_FILE)
@@ -67,7 +66,7 @@ def main():
         sys.exit(1)
 
     logger.info(f"Smart Bin '{BIN_ID}' is active.")
-    logger.info(f"==> Para classificar, rode este comando via SSH: touch {TRIGGER_FILE} <==")
+    logger.info(f"==> Para classificar, rode este comando via SSH: docker exec ecosort-edge touch /app/{TRIGGER_FILE} <==")
 
     try:
         while True:
