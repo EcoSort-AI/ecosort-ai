@@ -117,6 +117,10 @@ def main():
     logger.info(f"Lixeira '{BIN_ID}' está ativa.")
     logger.info(f"==> DICA: Para classificar, rode o comando SSH: docker exec ecosort-edge touch /app/{TRIGGER_FILE} <==")
 
+    window_name = "EcoSort - Validation HUD"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
     try:
         while True:
             ret, frame = cap.read()
@@ -151,7 +155,7 @@ def main():
             cv2.putText(display_frame, "[ESC] para Sair (Testes Locais)", (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
 
             try:
-                cv2.imshow("EcoSort - Validation HUD", display_frame)
+                cv2.imshow(window_name, display_frame)
             except cv2.error:
                 pass
 
