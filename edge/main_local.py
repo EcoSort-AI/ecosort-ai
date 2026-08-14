@@ -14,9 +14,10 @@ from ultralytics import YOLO
 
 load_dotenv()
 
+# --- SETTINGS ---
 API_URL = os.getenv("API_URL")
 BIN_ID = os.getenv("BIN_ID", "smart_bin_01")
-MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model") 
+MODEL_PATH = os.getenv("MODEL_PATH", "best.pt")
 MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.0.0")
 
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.6))
@@ -29,6 +30,7 @@ CAMERA_SOURCE = int(camera_env) if camera_env.isdigit() else camera_env
 
 TRIGGER_FILE = "trigger.txt"
 
+# --- CLOUDFLARE R2 ---
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
 s3_client = boto3.client(
     service_name='s3',
@@ -85,7 +87,7 @@ def send_classification_to_api(class_name: str, confidence: float, image_path: s
         logger.error(f"Unexpected connection error: {e}")
 
 def main():
-    logger.info("Initializing EcoSort Visual Validation Mode...")
+    logger.info("Initializing EcoSort Visual Validation Mode (Local)...")
     
     if os.path.exists(TRIGGER_FILE):
         os.remove(TRIGGER_FILE)
@@ -101,8 +103,10 @@ def main():
     cap = cv2.VideoCapture(CAMERA_SOURCE)
     
     if not cap.isOpened():
+        logger.warning(f"Falha ao abrir CAMERA_SOURCE {CAMERA_SOURCE}. Tentando fallback para 0...")
         cap = cv2.VideoCapture(0)
 
+    # Força a resolução HD no Windows/Local
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -112,6 +116,10 @@ def main():
     text_color = (255, 255, 255) 
 
     logger.info(f"Smart Bin '{BIN_ID}' is active.")
+
+    window_name = "EcoSort - Validation HUD"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
     try:
         while True:
@@ -123,6 +131,7 @@ def main():
                 cap = cv2.VideoCapture(CAMERA_SOURCE)
                 continue
 
+            # --- CROP ---
             height, width, _ = frame.shape
             fraction = 0.6
             side = int(min(height, width) * fraction)
@@ -133,6 +142,7 @@ def main():
             y_max = y_min + side
             x_max = x_min + side
 
+            # --- (Heads-Up Display) ---
             display_frame = frame.copy()
 
             cv2.rectangle(display_frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
@@ -144,10 +154,14 @@ def main():
 
             cv2.putText(display_frame, "[SPACE] to Classify | [ESC] to Exit", (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
 
-            cv2.imshow("EcoSort - Validation HUD", display_frame)
+            try:
+                cv2.imshow(window_name, display_frame)
+            except cv2.error:
+                pass
 
             key = cv2.waitKey(30)
             
+            # --- TRIGGER ACTION ---
             if os.path.exists(TRIGGER_FILE) or key == 32:
                 logger.info("Triggering neural network...")
                 
@@ -156,7 +170,7 @@ def main():
                 
                 cropped_frame_for_ai = frame[y_min:y_max, x_min:x_max]
                 
-                results = model.predict(source=cropped_frame_for_ai, conf=CONFIDENCE_THRESHOLD, verbose=False)
+                results = model.predict(source=cropped_frame_for_ai, conf=0.01, verbose=False)
                 res = results[0]
                 
                 if res.probs is not None:
@@ -164,51 +178,35 @@ def main():
                     class_name = res.names[top_index]
                     confidence = float(res.probs.top1conf)
 
-                    if confidence >= CONFIDENCE_THRESHOLD:
-                        event_uuid = str(uuid.uuid4())
-                        
-                        is_audit = random.random() <= 0.20
+                    event_uuid = str(uuid.uuid4())
 
-                        if confidence >= HIGH_CONF_THRESHOLD and not is_audit:
-                            logger.info(f"HIGH CONFIDENCE: {class_name.upper()} ({confidence:.2%})")
-                            send_classification_to_api(class_name, confidence, image_path=None, event_id=event_uuid)
-                            
-                            last_class = class_name
-                            last_conf = confidence
-                            text_color = (0, 255, 0) 
-                            
-                        else:
-                            if is_audit and confidence >= HIGH_CONF_THRESHOLD:
-                                logger.info(f"RANDOM AUDIT: {class_name.upper()} ({confidence:.2%}). Sending for review.")
-                            else:
-                                logger.info(f"REVIEW REQUIRED: {class_name.upper()} ({confidence:.2%})")
-                            
-                            temp_filename = f"temp_{event_uuid}.jpg"
-                            cv2.imwrite(temp_filename, frame) 
-                            
-                            r2_path = f"pending/{event_uuid}.jpg"
-                            
-                            upload_success = upload_to_r2(temp_filename, r2_path)
-                            
-                            if upload_success:
-                                send_classification_to_api(class_name, confidence, image_path=r2_path, event_id=event_uuid)
-                            
-                            if os.path.exists(temp_filename):
-                                os.remove(temp_filename)
-                            
-                            if is_audit and confidence >= HIGH_CONF_THRESHOLD:
-                                last_class = f"Audit ({class_name})"
-                            else:
-                                last_class = f"Review ({class_name})"
-                                
-                            last_conf = confidence
-                            text_color = (0, 165, 255) 
-
+                    if confidence >= HIGH_CONF_THRESHOLD:
+                        logger.info(f"HIGH CONFIDENCE: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
+                        last_class = class_name
+                        text_color = (0, 255, 0)
+                    elif confidence >= CONFIDENCE_THRESHOLD:
+                        logger.info(f"REVIEW REQUIRED: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
+                        last_class = f"Review ({class_name})"
+                        text_color = (0, 165, 255)
                     else:
-                        logger.warning(f"Inconclusive: {class_name} at {confidence:.2%}")
+                        logger.warning(f"INCONCLUSIVE: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
                         last_class = f"Unsure ({class_name})"
-                        last_conf = confidence
-                        text_color = (0, 165, 255) 
+                        text_color = (0, 0, 255) 
+                        
+                    last_conf = confidence
+
+                    temp_filename = f"temp_{event_uuid}.jpg"
+                    cv2.imwrite(temp_filename, frame) 
+                    
+                    r2_path = f"pending/{event_uuid}.jpg"
+                    upload_success = upload_to_r2(temp_filename, r2_path)
+                    
+                    final_image_path = r2_path if upload_success else None
+                    send_classification_to_api(class_name, confidence, image_path=final_image_path, event_id=event_uuid)
+                    
+                    if os.path.exists(temp_filename):
+                        os.remove(temp_filename)
+
                 else:
                     logger.warning("No object recognized.")
                     last_class = "Not recognized"

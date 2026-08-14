@@ -16,14 +16,14 @@ from ultralytics import YOLO
 load_dotenv()
 # --- SETTINGS ---
 API_URL = os.getenv("API_URL")
-# Deduz a URL base a partir da URL de eventos para usar nas rotas de device
 API_BASE_URL = os.getenv("API_BASE_URL", API_URL.replace("/trash-events", "") if API_URL else "http://localhost:3000/api/v1")
 BIN_ID = os.getenv("BIN_ID", "smart_bin_01")
 MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model")
 MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.0.0")
-# Transformado em variável global para ser atualizada pela Thread de segundo plano
+
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.6))
 HIGH_CONF_THRESHOLD = float(os.getenv("HIGH_CONF_THRESHOLD", 0.8))
+
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 5))
 camera_env = os.getenv("CAMERA_SOURCE", "0")
 CAMERA_SOURCE = int(camera_env) if camera_env.isdigit() else camera_env
@@ -55,7 +55,7 @@ def background_worker():
         "Content-Type": "application/json"
     }
     while True:
-        # 1. Sincroniza Configurações (Limiar de Confiança)
+       
         try:
             config_res = requests.get(f"{API_BASE_URL}/device/config?device={BIN_ID}", headers=auth_header, timeout=REQUEST_TIMEOUT)
             if config_res.status_code == 200:
@@ -66,9 +66,9 @@ def background_worker():
                     CONFIDENCE_THRESHOLD = new_threshold
         except Exception as e:
             logger.debug(f"[CONFIG] Falha ao sincronizar configurações: {e}")
-        # 2. Coleta e Envia Telemetria
+       
         try:
-            # Leitura de Sensores
+           
             cpu_usage = psutil.cpu_percent(interval=None)
             ram = psutil.virtual_memory()
             disk = psutil.disk_usage('/')
@@ -94,23 +94,23 @@ def background_worker():
         except Exception as e:
             logger.debug(f"[TELEMETRY] Falha ao enviar telemetria: {e}")
         # ==========================================
-        # 3. VERIFICAÇÃO DE COMANDOS REMOTOS
+        # REMOTE COMMANDS
         # ==========================================
         try:
             cmd_res = requests.get(f"{API_BASE_URL}/device/commands?device={BIN_ID}&status=pending", headers=auth_header, timeout=REQUEST_TIMEOUT)
             if cmd_res.status_code == 200:
                 commands = cmd_res.json()
-                # Se não for uma lista vazia, vamos imprimir no terminal para vermos o que o banco devolveu!
+                
                 if commands:
                     logger.info(f"[COMMANDS] Resposta da API: {commands}")
-                # Adaptação para pegar o comando (seja um array ou um objeto único)
+                
                 latest_cmd = commands[0] if isinstance(commands, list) and len(commands) > 0 else (commands if isinstance(commands, dict) else {})
                 if latest_cmd and latest_cmd.get("command") in ["restart", "restart_docker"]:
                     logger.warning("Comando de REINICIALIZAÇÃO recebido da nuvem!")
-                    # Pega o ID (Testando as duas nomenclaturas comuns)
+                    
                     cmd_id = latest_cmd.get("id") or latest_cmd.get("command_id")
                     if cmd_id:
-                        # Enviando o command_id no BODY conforme a sua API exige
+                        
                         payload = {
                             "command_id": cmd_id,
                             "status": "completed"
@@ -122,16 +122,16 @@ def background_worker():
                             logger.error(f"[COMMANDS] Falha ao marcar comando como concluído. API retornou: {patch_res.status_code}")
                     logger.warning("Derrubando processo para forçar o reinício pelo Docker...")
                     time.sleep(1)
-                    os._exit(1) # O Docker fará o restart automático
+                    os._exit(1) 
             else:
-                # Agora veremos se a API der Erro 403 (Sem permissão) ou 500
+                
                 logger.error(f"[COMMANDS] API recusou a busca de comandos. Status: {cmd_res.status_code}")
         except Exception as e:
             logger.error(f"[COMMANDS] Erro de conexão ao buscar comandos: {e}")
-        # Aguarda 30 segundos antes do próximo ciclo de background
+        
         time.sleep(30)
 # ==========================================
-# FUNÇÕES DE UPLOAD E CLASSIFICAÇÃO
+# CLASSIFICATION AND UPLOAD FUNCTIONS
 # ==========================================
 def upload_to_r2(local_file_path: str, r2_object_path: str) -> bool:
     try:
@@ -167,11 +167,11 @@ def send_classification_to_api(class_name: str, confidence: float, image_path: s
     except Exception as e:
         logger.error(f"Unexpected connection error: {e}")
 # ==========================================
-# MAIN LOOP (CÂMERA E INFERÊNCIA)
+# MAIN LOOP 
 # ==========================================
 def main():
     logger.info("Initializing EcoSort Visual Validation Mode...")
-    # Inicia a thread de telemetria em background
+    
     telemetry_thread = threading.Thread(target=background_worker, daemon=True)
     telemetry_thread.start()
     logger.info("Background Telemetry & Config worker started.")
@@ -225,7 +225,7 @@ def main():
             cv2.putText(display_frame, f"Class: {last_class.upper()}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, text_color, 3)
             if last_conf > 0:
                 cv2.putText(display_frame, f"Confidence: {last_conf:.1%}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
-            # Indicador do threshold atual em tempo real no HUD
+            
             cv2.putText(display_frame, f"Current Threshold: {CONFIDENCE_THRESHOLD:.1%}", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
             cv2.putText(display_frame, "[SPACE] to Classify | [ESC] to Exit", (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
             try:
@@ -239,7 +239,7 @@ def main():
                 if os.path.exists(TRIGGER_FILE):
                     os.remove(TRIGGER_FILE)
                 cropped_frame_for_ai = frame[y_min:y_max, x_min:x_max]
-                # config conf=0.01 to garantee best prediction from AI
+                
                 results = model.predict(source=cropped_frame_for_ai, conf=0.01, verbose=False)
                 res = results[0]
                 if res.probs is not None:
@@ -247,7 +247,7 @@ def main():
                     class_name = res.names[top_index]
                     confidence = float(res.probs.top1conf)
                     event_uuid = str(uuid.uuid4())
-                    # Usa a variável global atualizada pela API em vez do .env estático
+                   
                     if confidence >= HIGH_CONF_THRESHOLD:
                         logger.info(f"HIGH CONFIDENCE: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
                         last_class = class_name
