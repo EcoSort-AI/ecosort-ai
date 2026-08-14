@@ -8,10 +8,12 @@ services:
       - "/dev/video0:/dev/video0"
     group_add:
       - video
+    pid: "host"
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ~/.Xauthority:/root/.Xauthority:ro
       #- ./:/app # removed to use the code embedded in the image
+      - /sys/class/thermal:/sys/class/thermal:ro
     env_file:
       - .env
     environment:
