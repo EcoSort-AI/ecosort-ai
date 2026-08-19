@@ -22,6 +22,8 @@ API_BASE_URL = os.getenv("API_BASE_URL", API_URL.replace("/trash-events", "") if
 BIN_ID = os.getenv("BIN_ID", "smart_bin_01")
 MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model")
 MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.0.0")
+DEVICE_TOKEN = os.getenv("DEVICE_TOKEN")
+
 
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.6))
 HIGH_CONF_THRESHOLD = float(os.getenv("HIGH_CONF_THRESHOLD", 0.8))
@@ -55,9 +57,9 @@ logger = logging.getLogger(__name__)
 def background_worker():
     """Roda a cada 2 minutos enviando telemetria e recebendo configs e comandos da Vercel"""
     global CONFIDENCE_THRESHOLD
-    
+        
     auth_header = {
-        "Authorization": f"Bearer ecotoken_{BIN_ID}",
+        "Authorization": f"Bearer {DEVICE_TOKEN}",
         "Content-Type": "application/json"
     }
     
@@ -145,9 +147,10 @@ def send_classification_to_api(class_name: str, confidence: float, image_path: s
         },
     }
     if image_path:
-        payload["image_path"] = image_path
+        payload["image_path"] = image_path    
     auth_header = {
-        "Authorization": f"Bearer ecotoken_{BIN_ID}"
+        "Authorization": f"Bearer {DEVICE_TOKEN}",
+        "Content-Type": "application/json"
     }
     try:
         response = requests.post(API_URL, json=payload, headers=auth_header, timeout=REQUEST_TIMEOUT)
