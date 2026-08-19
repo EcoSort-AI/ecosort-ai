@@ -22,7 +22,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", API_URL.replace("/trash-events", "") if
 BIN_ID = os.getenv("BIN_ID", "smart_bin_01")
 MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model")
 MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.0.0")
-DEVICE_TOKEN = os.getenv("DEVICE_TOKEN")
+DEVICE_TOKEN = str(os.getenv("DEVICE_TOKEN", "")).strip()
 
 
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.6))
