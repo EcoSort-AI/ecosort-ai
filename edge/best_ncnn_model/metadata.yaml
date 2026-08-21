@@ -1,26 +1,22 @@
 description: Ultralytics YOLOv8n-cls model trained on /content/dataset-ecosort-split
 author: Ultralytics
-date: '2026-08-20T17:16:08.876655+00:00'
-version: 8.4.124
+date: '2026-06-26T12:28:30.319340'
+version: 8.4.78
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com
 stride: 1
 task: classify
-head: Classify
 batch: 1
 imgsz:
 - 224
 - 224
 names:
-  0: brown-glass
-  1: cardboard
-  2: green-glass
-  3: metal
-  4: paper
-  5: plastic
-  6: white-glass
+  0: metal
+  1: paper
+  2: plastic
+  3: white-glass
 args:
   batch: 1
-  quantize: null
+  half: false
 channels: 3
 end2end: false
