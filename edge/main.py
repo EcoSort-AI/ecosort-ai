@@ -9,6 +9,7 @@ import uuid
 import boto3
 import threading
 import psutil
+import json
 from botocore.exceptions import ClientError
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -21,9 +22,8 @@ API_URL = os.getenv("API_URL")
 API_BASE_URL = os.getenv("API_BASE_URL", API_URL.replace("/trash-events", "") if API_URL else "http://localhost:3000/api/v1")
 BIN_ID = os.getenv("BIN_ID", "smart_bin_01")
 MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model")
-MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.0.0")
+MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.1.0")
 DEVICE_TOKEN = str(os.getenv("DEVICE_TOKEN", "")).strip()
-
 
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.6))
 HIGH_CONF_THRESHOLD = float(os.getenv("HIGH_CONF_THRESHOLD", 0.8))
@@ -32,6 +32,10 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 5))
 camera_env = os.getenv("CAMERA_SOURCE", "0")
 CAMERA_SOURCE = int(camera_env) if camera_env.isdigit() else camera_env
 TRIGGER_FILE = "trigger.txt"
+
+# --- SPOOL ---
+SPOOL_DIR = os.getenv("SPOOL_DIR", "/app/data/spool/")
+os.makedirs(SPOOL_DIR, exist_ok=True)
 
 # --- CLOUDFLARE R2 ---
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
@@ -52,10 +56,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==========================================
-# BACKGROUND WORKER
+# BACKGROUND WORKERS (TELEMETRIA E FILA)
 # ==========================================
 def background_worker():
-    """Roda a cada 2 minutos enviando telemetria e recebendo configs e comandos da Vercel"""
+    """Roda a cada 2 minutos enviando telemetria e recebendo configs e comandos"""
     global CONFIDENCE_THRESHOLD
         
     auth_header = {
@@ -114,7 +118,6 @@ def background_worker():
                     logger.warning("Derrubando processo para forçar o reinício pelo Docker...")
                     time.sleep(1)
                     os._exit(1)
-
             else:
                 logger.debug(f"[SYNC] Servidor rejeitou sincronização. Status: {sync_res.status_code}")
 
@@ -123,23 +126,74 @@ def background_worker():
 
         time.sleep(120)
 
+def queue_worker():
+    """Fila local persistente. Lê o disco e envia eventos pendentes para a nuvem de forma idempotente."""
+    while True:
+        try:
+            arquivos = os.listdir(SPOOL_DIR)
+            for filename in arquivos:
+                if filename.endswith(".json"):
+                    event_id = filename.replace(".json", "")
+                    json_path = os.path.join(SPOOL_DIR, filename)
+                    img_path = os.path.join(SPOOL_DIR, f"{event_id}.jpg")
+                    
+                    if not os.path.exists(img_path):
+                        os.remove(json_path) 
+                        continue
+                        
+                    with open(json_path, "r") as f:
+                        data = json.load(f)
+                        
+                    r2_path = f"pending/{event_id}.jpg"
+                    
+                    if upload_to_r2(img_path, r2_path):
+                        if send_classification_to_api(data["class_name"], data["confidence"], r2_path, event_id, data["timestamp"]):
+                            os.remove(img_path)
+                            os.remove(json_path)
+                            logger.info(f"[QUEUE] Evento {event_id} processado com sucesso e removido do disco.")
+                        else:
+                            logger.warning(f"[QUEUE] Falha na API para {event_id}. Mantendo no spool para retentativa.")
+                    else:
+                        logger.warning(f"[QUEUE] Falha no R2 para {event_id}. Mantendo no spool para retentativa.")
+                        
+        except Exception as e:
+            logger.error(f"[QUEUE] Erro ao processar a fila persistente: {e}")
+            
+        time.sleep(10)
+
 # ==========================================
 # CLASSIFICATION AND UPLOAD FUNCTIONS
 # ==========================================
+def enqueue_event(event_id: str, frame, class_name: str, confidence: float):
+    """Salva frame original e metadados no disco para processamento resiliente."""
+    img_path = os.path.join(SPOOL_DIR, f"{event_id}.jpg")
+    json_path = os.path.join(SPOOL_DIR, f"{event_id}.json")
+    
+    cv2.imwrite(img_path, frame)
+    
+    payload = {
+        "event_id": event_id,
+        "class_name": class_name,
+        "confidence": confidence,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    }
+    
+    with open(json_path, "w") as f:
+        json.dump(payload, f)
+    logger.info(f"[SPOOL] Evento {event_id} salvo na fila local.")
+
 def upload_to_r2(local_file_path: str, r2_object_path: str) -> bool:
     try:
         s3_client.upload_file(local_file_path, R2_BUCKET_NAME, r2_object_path)
-        logger.info(f"Upload completed successfully: {r2_object_path}")
         return True
     except ClientError as e:
-        logger.error(f"Error uploading to R2: {e}")
         return False
 
-def send_classification_to_api(class_name: str, confidence: float, image_path: str, event_id: str) -> None:
+def send_classification_to_api(class_name: str, confidence: float, image_path: str, event_id: str, timestamp: str) -> bool:
     payload = {
         "bin_id": BIN_ID,
         "source_event_id": event_id,
-        "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        "timestamp": timestamp,
         "model_version": MODEL_VERSION,
         "detection": {
             "class_name": class_name.lower(),
@@ -148,6 +202,7 @@ def send_classification_to_api(class_name: str, confidence: float, image_path: s
     }
     if image_path:
         payload["image_path"] = image_path    
+        
     auth_header = {
         "Authorization": f"Bearer {DEVICE_TOKEN}",
         "Content-Type": "application/json"
@@ -155,12 +210,13 @@ def send_classification_to_api(class_name: str, confidence: float, image_path: s
     try:
         response = requests.post(API_URL, json=payload, headers=auth_header, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        logger.info(f"Data successfully sent to the backend. Status: {response.status_code}")
+        return True
     except requests.exceptions.HTTPError as e:
-        logger.error(f"Error sending data to the backend: {e}")
-        logger.error(f"Backend rejection details: {e.response.text if hasattr(e, 'response') else 'No details'}")
+        logger.error(f"Erro HTTP da API (Rejeição): {e.response.text if hasattr(e, 'response') else e}")
+        return False
     except Exception as e:
-        logger.error(f"Unexpected connection error: {e}")
+        logger.error(f"Erro de conexão com API: {e}")
+        return False
 
 # ==========================================
 # MAIN LOOP 
@@ -168,9 +224,10 @@ def send_classification_to_api(class_name: str, confidence: float, image_path: s
 def main():
     logger.info("Initializing EcoSort Visual Validation Mode...")
     
-    telemetry_thread = threading.Thread(target=background_worker, daemon=True)
-    telemetry_thread.start()
-    logger.info("Background Telemetry & Config worker started.")
+    threading.Thread(target=background_worker, daemon=True).start()
+    threading.Thread(target=queue_worker, daemon=True).start()
+    
+    logger.info("Background Telemetry & Persistent Queue workers started.")
     
     if os.path.exists(TRIGGER_FILE):
         os.remove(TRIGGER_FILE)
@@ -214,25 +271,15 @@ def main():
                 cap = cv2.VideoCapture(CAMERA_SOURCE)
                 continue
                 
-            # --- CROP ---
             height, width, _ = frame.shape
-            fraction = 0.6
-            side = int(min(height, width) * fraction)
-            y_center, x_center = height // 2, width // 2
-            y_min = y_center - side // 2
-            x_min = x_center - side // 2
-            y_max = y_min + side
-            x_max = x_min + side
             
-            # --- (Heads-Up Display) ---
             display_frame = frame.copy()
-            cv2.rectangle(display_frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-            cv2.putText(display_frame, "AI ANALYSIS ZONE", (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.putText(display_frame, f"Class: {last_class.upper()}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, text_color, 3)
+            
             if last_conf > 0:
                 cv2.putText(display_frame, f"Confidence: {last_conf:.1%}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
             
-            cv2.putText(display_frame, f"Current Threshold: {CONFIDENCE_THRESHOLD:.1%}", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+            cv2.putText(display_frame, f"Current Threshold: {CONFIDENCE_THRESHOLD:.1%}", (20, height - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
             cv2.putText(display_frame, "[SPACE] to Classify | [ESC] to Exit", (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
             
             try:
@@ -247,9 +294,8 @@ def main():
                 logger.info("Triggering neural network...")
                 if os.path.exists(TRIGGER_FILE):
                     os.remove(TRIGGER_FILE)
-                cropped_frame_for_ai = frame[y_min:y_max, x_min:x_max]
                 
-                results = model.predict(source=cropped_frame_for_ai, conf=0.01, verbose=False)
+                results = model.predict(source=frame, conf=0.01, verbose=False)
                 res = results[0]
                 
                 if res.probs is not None:
@@ -259,32 +305,22 @@ def main():
                     event_uuid = str(uuid.uuid4())
                    
                     if confidence >= HIGH_CONF_THRESHOLD:
-                        logger.info(f"HIGH CONFIDENCE: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
+                        logger.info(f"HIGH CONFIDENCE: {class_name.upper()} ({confidence:.2%}).")
                         last_class = class_name
                         text_color = (0, 255, 0) 
                     elif confidence >= CONFIDENCE_THRESHOLD:
-                        logger.info(f"REVIEW REQUIRED: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
+                        logger.info(f"REVIEW REQUIRED: {class_name.upper()} ({confidence:.2%}).")
                         last_class = f"Review ({class_name})"
                         text_color = (0, 165, 255)
                     else:
-                        logger.warning(f"INCONCLUSIVE: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
+                        logger.warning(f"INCONCLUSIVE: {class_name.upper()} ({confidence:.2%}).")
                         last_class = f"Unsure ({class_name})"
                         text_color = (0, 0, 255)
                         
                     last_conf = confidence
                     
-                    # Upload of all detections
-                    temp_filename = f"temp_{event_uuid}.jpg"
-                    cv2.imwrite(temp_filename, frame)
-                    r2_path = f"pending/{event_uuid}.jpg"
-                    upload_success = upload_to_r2(temp_filename, r2_path)
+                    enqueue_event(event_uuid, frame, class_name, confidence)
                     
-                    # Send to API
-                    final_image_path = r2_path if upload_success else None
-                    send_classification_to_api(class_name, confidence, image_path=final_image_path, event_id=event_uuid)
-                    
-                    if os.path.exists(temp_filename):
-                        os.remove(temp_filename)
                 else:
                     logger.warning("No object recognized.")
                     last_class = "Not recognized"
