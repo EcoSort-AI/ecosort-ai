@@ -9,17 +9,25 @@ import uuid
 import boto3
 import threading
 import psutil
+import json
+import numpy as np
 from botocore.exceptions import ClientError
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from ultralytics import YOLO
+
+# Importando nosso módulo dedicado de hardware
+from mecatronica import Mecatronica
+
 load_dotenv()
+
 # --- SETTINGS ---
 API_URL = os.getenv("API_URL")
 API_BASE_URL = os.getenv("API_BASE_URL", API_URL.replace("/trash-events", "") if API_URL else "http://localhost:3000/api/v1")
 BIN_ID = os.getenv("BIN_ID", "smart_bin_01")
 MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model")
-MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.0.0")
+MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.3.0")
+DEVICE_TOKEN = str(os.getenv("DEVICE_TOKEN", "")).strip()
 
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.6))
 HIGH_CONF_THRESHOLD = float(os.getenv("HIGH_CONF_THRESHOLD", 0.8))
@@ -28,6 +36,29 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 5))
 camera_env = os.getenv("CAMERA_SOURCE", "0")
 CAMERA_SOURCE = int(camera_env) if camera_env.isdigit() else camera_env
 TRIGGER_FILE = "trigger.txt"
+
+# --- DISPLAY SETTINGS ---
+DISPLAY_MODE = os.getenv("DISPLAY_MODE", "prod").lower() # 'dev' ou 'prod'
+ASSETS_DIR = os.getenv("ASSETS_DIR", "/app/assets")
+
+DISPLAY_TIME_SUCCESS = float(os.getenv("DISPLAY_TIME_SUCCESS", 7.0))
+DISPLAY_TIME_UNSURE = float(os.getenv("DISPLAY_TIME_UNSURE", 4.0))
+
+RECYCLING_COLORS = {
+    "paper": (255, 0, 0),       # Azul
+    "cardboard": (255, 0, 0),   # Azul
+    "plastic": (0, 0, 255),     # Vermelho
+    "white-glass": (0, 200, 0), # Verde
+    "green-glass": (0, 200, 0), # Verde
+    "brown-glass": (0, 200, 0), # Verde
+    "metal": (0, 255, 255),     # Amarelo
+    "unsure": (128, 128, 128)   # Cinza (Não reconhecido)
+}
+
+# --- SPOOL / FILA PERSISTENTE ---
+SPOOL_DIR = os.getenv("SPOOL_DIR", "/app/data/spool/")
+os.makedirs(SPOOL_DIR, exist_ok=True)
+
 # --- CLOUDFLARE R2 ---
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
 s3_client = boto3.client(
@@ -37,6 +68,7 @@ s3_client = boto3.client(
     aws_secret_access_key=os.getenv('R2_SECRET_ACCESS_KEY'),
     region_name="auto"
 )
+
 # --- LOGS ---
 logging.basicConfig(
     level=logging.INFO,
@@ -44,31 +76,21 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+
+# --- INSTÂNCIA DO HARDWARE ---
+mecanismo = Mecatronica()
+
 # ==========================================
-# BACKGROUND WORKER (TELEMETRIA E CONFIG)
+# BACKGROUND WORKERS
 # ==========================================
 def background_worker():
-    """Roda em paralelo para não travar o feed de vídeo da câmera"""
     global CONFIDENCE_THRESHOLD
     auth_header = {
-        "Authorization": f"Bearer ecotoken_{BIN_ID}",
+        "Authorization": f"Bearer {DEVICE_TOKEN}",
         "Content-Type": "application/json"
     }
     while True:
-       
         try:
-            config_res = requests.get(f"{API_BASE_URL}/device/config?device={BIN_ID}", headers=auth_header, timeout=REQUEST_TIMEOUT)
-            if config_res.status_code == 200:
-                config_data = config_res.json()
-                new_threshold = float(config_data.get('confidence_threshold', 80)) / 100.0
-                if new_threshold != CONFIDENCE_THRESHOLD:
-                    logger.info(f"[CONFIG] Limiar de confiança atualizado remotamente para: {new_threshold:.1%}")
-                    CONFIDENCE_THRESHOLD = new_threshold
-        except Exception as e:
-            logger.debug(f"[CONFIG] Falha ao sincronizar configurações: {e}")
-       
-        try:
-           
             cpu_usage = psutil.cpu_percent(interval=None)
             ram = psutil.virtual_memory()
             disk = psutil.disk_usage('/')
@@ -77,10 +99,12 @@ def background_worker():
                     temp = float(f.read()) / 1000.0
             except FileNotFoundError:
                 temp = 0.0
+
             with open('/proc/uptime', 'r') as f:
                 uptime_seconds = float(f.readline().split()[0])
                 uptime_hours = int(uptime_seconds // 3600)
-            telemetry_data = {
+
+            payload = {
                 "device_name": BIN_ID,
                 "cpu_usage": round(cpu_usage, 1),
                 "ram_usage": f"{ram.percent}%",
@@ -88,203 +112,258 @@ def background_worker():
                 "temperature": round(temp, 1),
                 "uptime": f"{uptime_hours}h"
             }
-            tele_res = requests.post(f"{API_BASE_URL}/device/telemetry", headers=auth_header, json=telemetry_data, timeout=REQUEST_TIMEOUT)
-            if tele_res.status_code not in [200, 201]:
-                logger.debug(f"[TELEMETRY] Servidor rejeitou telemetria. Status: {tele_res.status_code}")
-        except Exception as e:
-            logger.debug(f"[TELEMETRY] Falha ao enviar telemetria: {e}")
-        # ==========================================
-        # REMOTE COMMANDS
-        # ==========================================
-        try:
-            cmd_res = requests.get(f"{API_BASE_URL}/device/commands?device={BIN_ID}&status=pending", headers=auth_header, timeout=REQUEST_TIMEOUT)
-            if cmd_res.status_code == 200:
-                commands = cmd_res.json()
-                
-                if commands:
-                    logger.info(f"[COMMANDS] Resposta da API: {commands}")
-                
+
+            sync_res = requests.post(f"{API_BASE_URL}/device/sync", headers=auth_header, json=payload, timeout=REQUEST_TIMEOUT)
+
+            if sync_res.status_code in [200, 201]:
+                data = sync_res.json()
+                config_data = data.get("config", {})
+                if config_data:
+                    new_threshold = float(config_data.get('confidence_threshold', 80)) / 100.0
+                    if new_threshold != CONFIDENCE_THRESHOLD:
+                        logger.info(f"[SYNC] Limiar remoto: {new_threshold:.1%}")
+                        CONFIDENCE_THRESHOLD = new_threshold
+
+                commands = data.get("commands", [])
                 latest_cmd = commands[0] if isinstance(commands, list) and len(commands) > 0 else (commands if isinstance(commands, dict) else {})
+
                 if latest_cmd and latest_cmd.get("command") in ["restart", "restart_docker"]:
-                    logger.warning("Comando de REINICIALIZAÇÃO recebido da nuvem!")
-                    
                     cmd_id = latest_cmd.get("id") or latest_cmd.get("command_id")
                     if cmd_id:
-                        
-                        payload = {
-                            "command_id": cmd_id,
-                            "status": "completed"
-                        }
-                        patch_res = requests.patch(f"{API_BASE_URL}/device/commands", headers=auth_header, json=payload, timeout=2)
-                        if patch_res.status_code == 200:
-                            logger.info(f"[COMMANDS] Comando {cmd_id} concluído no banco de dados com sucesso.")
-                        else:
-                            logger.error(f"[COMMANDS] Falha ao marcar comando como concluído. API retornou: {patch_res.status_code}")
-                    logger.warning("Derrubando processo para forçar o reinício pelo Docker...")
+                        requests.patch(f"{API_BASE_URL}/device/commands", headers=auth_header, json={"command_id": cmd_id, "status": "completed"}, timeout=2)
                     time.sleep(1)
-                    os._exit(1) 
-            else:
-                
-                logger.error(f"[COMMANDS] API recusou a busca de comandos. Status: {cmd_res.status_code}")
+                    os._exit(1)
         except Exception as e:
-            logger.error(f"[COMMANDS] Erro de conexão ao buscar comandos: {e}")
-        
-        time.sleep(30)
-# ==========================================
-# CLASSIFICATION AND UPLOAD FUNCTIONS
-# ==========================================
+            pass
+        time.sleep(120)
+
+def queue_worker():
+    while True:
+        try:
+            arquivos = os.listdir(SPOOL_DIR)
+            for filename in arquivos:
+                if filename.endswith(".json"):
+                    event_id = filename.replace(".json", "")
+                    json_path = os.path.join(SPOOL_DIR, filename)
+                    img_path = os.path.join(SPOOL_DIR, f"{event_id}.jpg")
+
+                    if not os.path.exists(img_path):
+                        os.remove(json_path)
+                        continue
+
+                    with open(json_path, "r") as f:
+                        data = json.load(f)
+
+                    r2_path = f"pending/{event_id}.jpg"
+                    if upload_to_r2(img_path, r2_path):
+                        if send_classification_to_api(data["class_name"], data["confidence"], r2_path, event_id, data["timestamp"]):
+                            os.remove(img_path)
+                            os.remove(json_path)
+        except Exception as e:
+            pass
+        time.sleep(10)
+
+def enqueue_event(event_id: str, frame, class_name: str, confidence: float):
+    img_path = os.path.join(SPOOL_DIR, f"{event_id}.jpg")
+    json_path = os.path.join(SPOOL_DIR, f"{event_id}.json")
+    cv2.imwrite(img_path, frame)
+    payload = {
+        "event_id": event_id,
+        "class_name": class_name,
+        "confidence": confidence,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    }
+    with open(json_path, "w") as f:
+        json.dump(payload, f)
+
 def upload_to_r2(local_file_path: str, r2_object_path: str) -> bool:
     try:
         s3_client.upload_file(local_file_path, R2_BUCKET_NAME, r2_object_path)
-        logger.info(f"Upload completed successfully: {r2_object_path}")
         return True
-    except ClientError as e:
-        logger.error(f"Error uploading to R2: {e}")
+    except ClientError:
         return False
-def send_classification_to_api(class_name: str, confidence: float, image_path: str, event_id: str) -> None:
+
+def send_classification_to_api(class_name: str, confidence: float, image_path: str, event_id: str, timestamp: str) -> bool:
     payload = {
         "bin_id": BIN_ID,
         "source_event_id": event_id,
-        "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        "timestamp": timestamp,
         "model_version": MODEL_VERSION,
-        "detection": {
-            "class_name": class_name.lower(),
-            "confidence": round(confidence, 4)
-        },
-    }
-    if image_path:
-        payload["image_path"] = image_path
-    auth_header = {
-        "Authorization": f"Bearer ecotoken_{BIN_ID}"
+        "detection": {"class_name": class_name.lower(), "confidence": round(confidence, 4)},
+        "image_path": image_path
     }
     try:
-        response = requests.post(API_URL, json=payload, headers=auth_header, timeout=REQUEST_TIMEOUT)
+        response = requests.post(API_URL, json=payload, headers={"Authorization": f"Bearer {DEVICE_TOKEN}"}, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        logger.info(f"Data successfully sent to the backend. Status: {response.status_code}")
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"Error sending data to the backend: {e}")
-        logger.error(f"Backend rejection details: {e.response.text if hasattr(e, 'response') else 'No details'}")
-    except Exception as e:
-        logger.error(f"Unexpected connection error: {e}")
+        return True
+    except:
+        return False
+
 # ==========================================
-# MAIN LOOP 
+# MAIN LOOP AND INTERFACE
 # ==========================================
 def main():
-    logger.info("Initializing EcoSort Visual Validation Mode...")
-    
-    telemetry_thread = threading.Thread(target=background_worker, daemon=True)
-    telemetry_thread.start()
-    logger.info("Background Telemetry & Config worker started.")
-    if os.path.exists(TRIGGER_FILE):
-        os.remove(TRIGGER_FILE)
+    logger.info(f"Initializing EcoSort - Display Mode: {DISPLAY_MODE.upper()}")
+
+    threading.Thread(target=background_worker, daemon=True).start()
+    threading.Thread(target=queue_worker, daemon=True).start()
+
+    if os.path.exists(TRIGGER_FILE): os.remove(TRIGGER_FILE)
+
     try:
         model = YOLO(MODEL_PATH, task="classify")
-        logger.info(f"Model loaded successfully from {MODEL_PATH}")
     except Exception as e:
         logger.critical(f"Failed to load YOLO model: {e}")
         sys.exit(1)
-    logger.info("Initializing real-time camera...")
+
     cap = cv2.VideoCapture(CAMERA_SOURCE)
     if not cap.isOpened():
-        logger.warning(f"Failed to open CAMERA_SOURCE {CAMERA_SOURCE}. Trying fallback to 0...")
         cap = cv2.VideoCapture(0)
+
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
     last_class = "Waiting..."
     last_conf = 0.0
     text_color = (255, 255, 255)
-    logger.info(f"Smart Bin '{BIN_ID}' is active.")
-    logger.info(f"==> DICA: Para classificar, rode o comando SSH: docker exec ecosort-edge touch /app/{TRIGGER_FILE} <==")
-    # --- FULLSCREEN SETTINGS ---
-    window_name = "EcoSort - Validation HUD"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    show_ui_until = 0.0
+    ui_detected_class = ""
+
+    window_name = "EcoSort UI"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
     cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
-                logger.warning("Camera signal lost. Attempting to reconnect...")
-                cap.release()
-                time.sleep(2)
+                time.sleep(1)
                 cap = cv2.VideoCapture(CAMERA_SOURCE)
                 continue
-            # --- CROP ---
+
             height, width, _ = frame.shape
-            fraction = 0.6
-            side = int(min(height, width) * fraction)
-            y_center, x_center = height // 2, width // 2
-            y_min = y_center - side // 2
-            x_min = x_center - side // 2
-            y_max = y_min + side
-            x_max = x_min + side
-            # --- (Heads-Up Display) ---
-            display_frame = frame.copy()
-            cv2.rectangle(display_frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-            cv2.putText(display_frame, "AI ANALYSIS ZONE", (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"Class: {last_class.upper()}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, text_color, 3)
-            if last_conf > 0:
-                cv2.putText(display_frame, f"Confidence: {last_conf:.1%}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
-            
-            cv2.putText(display_frame, f"Current Threshold: {CONFIDENCE_THRESHOLD:.1%}", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
-            cv2.putText(display_frame, "[SPACE] to Classify | [ESC] to Exit", (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+            key = cv2.waitKey(30)
+
+            if os.path.exists(TRIGGER_FILE) or key == 32:
+                if os.path.exists(TRIGGER_FILE): os.remove(TRIGGER_FILE)
+
+                results = model.predict(source=frame, conf=0.01, verbose=False)
+                res = results[0]
+
+                if res.probs is not None:
+                    class_name = res.names[res.probs.top1]
+                    confidence = float(res.probs.top1conf)
+                    event_uuid = str(uuid.uuid4())
+
+                    if confidence >= CONFIDENCE_THRESHOLD:
+                        last_class = class_name
+                        text_color = (0, 255, 0) if confidence >= HIGH_CONF_THRESHOLD else (0, 165, 255)
+                        ui_detected_class = class_name
+                        show_ui_until = time.time() + DISPLAY_TIME_SUCCESS
+                    else:
+                        last_class = f"Unsure ({class_name})"
+                        text_color = (0, 0, 255)
+                        ui_detected_class = "unsure"
+                        show_ui_until = time.time() + DISPLAY_TIME_UNSURE
+
+                    last_conf = confidence
+                    enqueue_event(event_uuid, frame, class_name, confidence)
+
+                    # --- GATILHO DA MECATRÔNICA ---
+                    # Dispara os motores em segundo plano sem travar a renderização do HUD
+                    threading.Thread(
+                        target=mecanismo.classificar_residuo, 
+                        args=(class_name, confidence, CONFIDENCE_THRESHOLD), 
+                        daemon=True
+                    ).start()
+
+            # --- DISPLAY RENDER ---
+            if DISPLAY_MODE == "dev":
+                display_frame = frame.copy()
+                cv2.putText(display_frame, f"Class: {last_class.upper()}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, text_color, 3)
+                if last_conf > 0:
+                    cv2.putText(display_frame, f"Conf: {last_conf:.1%}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
+
+                cv2.putText(display_frame, f"Current Threshold: {CONFIDENCE_THRESHOLD:.1%}", (20, height - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+                cv2.putText(display_frame, "[SPACE] to Classify | [ESC] to Exit", (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+
+            else:
+                display_frame = np.zeros((height, width, 3), dtype=np.uint8)
+
+                if time.time() < show_ui_until:
+                    bg_color = RECYCLING_COLORS.get(ui_detected_class, (50, 50, 50))
+                    display_frame[:] = bg_color
+
+                    msg = "NAO RECONHECIDO. Tente novamente." if ui_detected_class == "unsure" else f"DETECTADO: {ui_detected_class.upper()}"
+                    text_size = cv2.getTextSize(msg, cv2.FONT_HERSHEY_DUPLEX, 1.5, 3)[0]
+                    text_x = (width - text_size[0]) // 2
+                    cv2.putText(display_frame, msg, (text_x, 150), cv2.FONT_HERSHEY_DUPLEX, 1.5, (255, 255, 255), 3)
+
+                    asset_path_png = os.path.join(ASSETS_DIR, f"{ui_detected_class}.png")
+                    asset_path_jpg = os.path.join(ASSETS_DIR, f"{ui_detected_class}.jpg")
+                    asset_img_path = asset_path_png if os.path.exists(asset_path_png) else asset_path_jpg
+
+                    if os.path.exists(asset_img_path):
+                        img_asset = cv2.imread(asset_img_path, cv2.IMREAD_UNCHANGED)
+                        if img_asset is not None:
+                            img_asset = cv2.resize(img_asset, (400, 400))
+                            start_y = (height - 400) // 2 + 50
+                            start_x = (width - 400) // 2
+                            roi = display_frame[start_y:start_y+400, start_x:start_x+400]
+
+                            if len(img_asset.shape) == 3 and img_asset.shape[2] == 4:
+                                alpha = img_asset[:, :, 3]
+                                mask_inv = cv2.bitwise_not(alpha)
+                                white_icon = np.full((400, 400, 3), 255, dtype=np.uint8)
+                                roi_bg = cv2.bitwise_and(roi, roi, mask=mask_inv)
+                                icon_fg = cv2.bitwise_and(white_icon, white_icon, mask=alpha)
+                                display_frame[start_y:start_y+400, start_x:start_x+400] = cv2.add(roi_bg, icon_fg)
+                            else:
+                                img_gray = cv2.cvtColor(img_asset, cv2.COLOR_BGR2GRAY)
+                                _, mask = cv2.threshold(img_gray, 15, 255, cv2.THRESH_BINARY)
+                                mask_inv = cv2.bitwise_not(mask)
+                                white_icon = np.full((400, 400, 3), 255, dtype=np.uint8)
+                                roi_bg = cv2.bitwise_and(roi, roi, mask=mask_inv)
+                                icon_fg = cv2.bitwise_and(white_icon, white_icon, mask=mask)
+                                display_frame[start_y:start_y+400, start_x:start_x+400] = cv2.add(roi_bg, icon_fg)
+                else:
+                    display_frame[:] = (0, 0, 0)
+                    logo_path = os.path.join(ASSETS_DIR, "logo.jpg")
+
+                    if os.path.exists(logo_path):
+                        bg_img = cv2.imread(logo_path)
+                        if bg_img is not None:
+                            scale = width / bg_img.shape[1]
+                            new_h = int(bg_img.shape[0] * scale)
+
+                            if new_h >= height:
+                                resized_bg = cv2.resize(bg_img, (width, new_h))
+                                start_y = (new_h - height) // 2
+                                display_frame[:] = resized_bg[start_y:start_y+height, :]
+                            else:
+                                scale = height / bg_img.shape[0]
+                                new_w = int(bg_img.shape[1] * scale)
+                                resized_bg = cv2.resize(bg_img, (new_w, height))
+                                start_x = (new_w - width) // 2
+                                display_frame[:] = resized_bg[:, start_x:start_x+width]
+                    else:
+                        cv2.putText(display_frame, "ECOSORT AI", ((width - 300) // 2, height // 2 - 50), cv2.FONT_HERSHEY_DUPLEX, 2, (255, 255, 255), 4)
+
             try:
                 cv2.imshow(window_name, display_frame)
             except cv2.error:
                 pass
-            key = cv2.waitKey(30)
-            # --- TRIGGER ACTION ---
-            if os.path.exists(TRIGGER_FILE) or key == 32:
-                logger.info("Triggering neural network...")
-                if os.path.exists(TRIGGER_FILE):
-                    os.remove(TRIGGER_FILE)
-                cropped_frame_for_ai = frame[y_min:y_max, x_min:x_max]
-                
-                results = model.predict(source=cropped_frame_for_ai, conf=0.01, verbose=False)
-                res = results[0]
-                if res.probs is not None:
-                    top_index = res.probs.top1
-                    class_name = res.names[top_index]
-                    confidence = float(res.probs.top1conf)
-                    event_uuid = str(uuid.uuid4())
-                   
-                    if confidence >= HIGH_CONF_THRESHOLD:
-                        logger.info(f"HIGH CONFIDENCE: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
-                        last_class = class_name
-                        text_color = (0, 255, 0) # Verde
-                    elif confidence >= CONFIDENCE_THRESHOLD:
-                        logger.info(f"REVIEW REQUIRED: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
-                        last_class = f"Review ({class_name})"
-                        text_color = (0, 165, 255) # Laranja
-                    else:
-                        logger.warning(f"INCONCLUSIVE: {class_name.upper()} ({confidence:.2%}). Saving to dataset.")
-                        last_class = f"Unsure ({class_name})"
-                        text_color = (0, 0, 255) # Vermelho
-                    last_conf = confidence
-                    # Upload of all detections
-                    temp_filename = f"temp_{event_uuid}.jpg"
-                    cv2.imwrite(temp_filename, frame)
-                    r2_path = f"pending/{event_uuid}.jpg"
-                    upload_success = upload_to_r2(temp_filename, r2_path)
-                    # Send to API
-                    final_image_path = r2_path if upload_success else None
-                    send_classification_to_api(class_name, confidence, image_path=final_image_path, event_id=event_uuid)
-                    if os.path.exists(temp_filename):
-                        os.remove(temp_filename)
-                else:
-                    logger.warning("No object recognized.")
-                    last_class = "Not recognized"
-                    last_conf = 0.0
-                    text_color = (0, 0, 255)
-            elif key == 27:
+
+            if key == 27:
                 break
+
     except KeyboardInterrupt:
-        logger.info("Shutdown signal received.")
+        pass
     finally:
-        logger.info("Releasing camera and shutting down...")
-        if cap is not None:
-            cap.release()
+        if cap is not None: cap.release()
         cv2.destroyAllWindows()
         sys.exit(0)
+
 if __name__ == "__main__":
-    main() 
+    main()
