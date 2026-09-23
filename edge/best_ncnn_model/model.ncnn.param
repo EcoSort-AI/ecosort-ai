@@ -76,5 +76,5 @@ Swish                    silu_54                  1 1 87 88
 Pooling                  gap_1                    1 1 88 89 0=1 4=1
 Reshape                  reshape_55               1 1 89 90 0=1 1=1 2=-1
 Flatten                  flatten_56               1 1 90 91
-InnerProduct             linear_28                1 1 91 92 0=4 1=1 2=5120
+InnerProduct             linear_28                1 1 91 92 0=7 1=1 2=8960
 Softmax                  softmax_0                1 1 92 out0 0=0 1=1
