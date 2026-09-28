@@ -4,3 +4,4 @@ datasets/
 yolov8n-cls.pt
 yolov8m-cls.pt
 *.cache
+__pycache__

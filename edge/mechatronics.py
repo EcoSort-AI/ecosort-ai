@@ -3,12 +3,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURAÇÕES ---
+# --- CONFIG ---
 CANAL_SERVO_X = 0
 CANAL_SERVO_Y = 1
 POSICAO_REPOUSO = (90.0, 90.0)
 
-# Mapeamento dos ângulos que você descobriu
+# Mapeamento dos ângulos
 CLASS_TO_TILT = {
     "metal":       (125.0, 115.0), # Superior Esquerdo
     "plastic":     (55.0, 115.0),  # Superior Direito
@@ -22,14 +22,12 @@ CLASS_TO_TILT = {
     "unsure":      POSICAO_REPOUSO
 }
 
-class Mecatronica:
+class Mechatronics:
     def __init__(self):
         self.pca = None
         self.servo_x = None
         self.servo_y = None
         
-        # O try/except garante que se você rodar o código no seu PC (Windows/Mac) 
-        # para testar a interface, o código não vai quebrar por falta de pinos I2C.
         try:
             import board
             import busio
@@ -44,22 +42,21 @@ class Mecatronica:
             self.servo_x = servo.Servo(self.pca.channels[CANAL_SERVO_X], min_pulse=500, max_pulse=2500, actuation_range=180)
             self.servo_y = servo.Servo(self.pca.channels[CANAL_SERVO_Y], min_pulse=500, max_pulse=2500, actuation_range=180)
             
-            # Centraliza e relaxa os motores na inicialização
             self.servo_x.angle = POSICAO_REPOUSO[0]
             self.servo_y.angle = POSICAO_REPOUSO[1]
             time.sleep(1.0)
-            self.relaxar_motores()
+            self.reset_servos()
             logger.info("Mecatrônica pronta e alinhada.")
             
         except Exception as e:
             logger.warning(f"Hardware mecatrônico não encontrado/desativado. Rodando apenas software. Erro: {e}")
 
-    def relaxar_motores(self):
+    def reset_servos(self):
         """Corta o sinal PWM (detach) para acabar com a tremedeira do DS3230"""
         if self.servo_x: self.servo_x.angle = None
         if self.servo_y: self.servo_y.angle = None
 
-    def classificar_residuo(self, class_name: str, confidence: float, threshold: float):
+    def classify(self, class_name: str, confidence: float, threshold: float):
         """Move os motores para a posição correta, aguarda a queda e retorna ao centro"""
         if not self.pca:
             return
@@ -71,21 +68,18 @@ class Mecatronica:
         ang_x, ang_y = CLASS_TO_TILT[alvo]
 
         if (ang_x, ang_y) == POSICAO_REPOUSO:
-            logger.info("⚙️ MECATRÔNICA: Lixo inconclusivo. Mantendo prato em repouso.")
+            logger.info("Lixo inconclusivo. Mantendo prato em repouso.")
             return
 
-        logger.info(f"⚙️ MECATRÔNICA: Despejando {alvo.upper()} -> X:{ang_x}° | Y:{ang_y}°")
+        logger.info(f"Despejando {alvo.upper()} -> X:{ang_x}° | Y:{ang_y}°")
         
-        # 1. Inclina o prato
         self.servo_x.angle = ang_x
         self.servo_y.angle = ang_y
         
-        # 2. Aguarda o lixo escorregar
         time.sleep(2.5) 
         
-        # 3. Retorna ao nivelamento e relaxa os motores
-        logger.info("⚙️ MECATRÔNICA: Retornando ao repouso.")
+        logger.info("Retornando ao repouso.")
         self.servo_x.angle = POSICAO_REPOUSO[0]
         self.servo_y.angle = POSICAO_REPOUSO[1]
         time.sleep(1.0)
-        self.relaxar_motores()
+        self.reset_servos()
