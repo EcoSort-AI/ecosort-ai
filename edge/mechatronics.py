@@ -6,18 +6,17 @@ logger = logging.getLogger(__name__)
 # --- CONFIG ---
 CANAL_SERVO_X = 0
 CANAL_SERVO_Y = 1
-POSICAO_REPOUSO = (90.0, 90.0)
+POSICAO_REPOUSO = (60.0, 128.0)
 
-# Mapeamento dos ângulos
 CLASS_TO_TILT = {
-    "metal":       (125.0, 115.0), # Superior Esquerdo
-    "plastic":     (55.0, 115.0),  # Superior Direito
-    "paper":       (55.0, 45.0),   # Inferior Esquerdo
-    "cardboard":   (55.0, 45.0),   # Inferior Esquerdo
-    "glass":       (125.0, 45.0),  # Inferior Direito
-    "brown-glass": (125.0, 45.0),  # Inferior Direito
-    "green-glass": (125.0, 45.0),  # Inferior Direito
-    "white-glass": (125.0, 45.0),  # Inferior Direito
+    "metal":       (95.0, 95.0),   # Superior Esquerdo
+    "plastic":     (25.0, 95.0),   # Superior Direito
+    "paper":       (25.0, 166.0),  # Inferior Esquerdo
+    "cardboard":   (25.0, 166.0),  # Inferior Esquerdo
+    "glass":       (95.0, 166.0),  # Inferior Direito
+    "brown-glass": (95.0, 166.0),  # Inferior Direito
+    "green-glass": (95.0, 166.0),  # Inferior Direito
+    "white-glass": (95.0, 166.0),  # Inferior Direito
     "reject":      POSICAO_REPOUSO,
     "unsure":      POSICAO_REPOUSO
 }
@@ -57,7 +56,7 @@ class Mechatronics:
         if self.servo_y: self.servo_y.angle = None
 
     def classify(self, class_name: str, confidence: float, threshold: float):
-        """Move os motores para a posição correta, aguarda a queda e retorna ao centro"""
+        """Move os motores em sequência: primeiro gira a base, depois inclina o prato."""
         if not self.pca:
             return
 
@@ -71,15 +70,24 @@ class Mechatronics:
             logger.info("Lixo inconclusivo. Mantendo prato em repouso.")
             return
 
-        logger.info(f"Despejando {alvo.upper()} -> X:{ang_x}° | Y:{ang_y}°")
+        logger.info(f"Despejando {alvo.upper()} -> Base X:{ang_x}° | Caçamba Y:{ang_y}°")
         
+        # 1. Gira apenas a base (X) para a direção correta mantendo o prato nivelado
         self.servo_x.angle = ang_x
-        self.servo_y.angle = ang_y
+        time.sleep(0.6) # Tempo para a base terminar de girar
         
-        time.sleep(2.5) 
+        # 2. Inclina a caçamba (Y) para derrubar o lixo
+        self.servo_y.angle = ang_y
+        time.sleep(2.0) # Tempo para o lixo escorregar
         
         logger.info("Retornando ao repouso.")
-        self.servo_x.angle = POSICAO_REPOUSO[0]
+        # 3. Retorna a caçamba para o nível horizontal (Y) PRIMEIRO
         self.servo_y.angle = POSICAO_REPOUSO[1]
-        time.sleep(1.0)
+        time.sleep(0.6)
+        
+        # 4. Retorna a base para a posição central (X) DEPOIS
+        self.servo_x.angle = POSICAO_REPOUSO[0]
+        time.sleep(0.6)
+        
+        # 5. Relaxa os motores
         self.reset_servos()
