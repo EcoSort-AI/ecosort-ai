@@ -4,16 +4,20 @@ services:
     container_name: ecosort-edge
     restart: unless-stopped
     network_mode: "host"
+    privileged: true
     devices:
       - "/dev/video0:/dev/video0"
+      - "/dev/i2c-1:/dev/i2c-1" # driver PCA9685
     group_add:
       - video
+      - i2c
     pid: "host"
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ~/.Xauthority:/root/.Xauthority:ro
       #- ./:/app # removed to use the code embedded in the image
       - /sys/class/thermal:/sys/class/thermal:ro
+      - ./data:/app/data
     env_file:
       - .env
     environment:
