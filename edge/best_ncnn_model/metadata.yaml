@@ -1,7 +1,7 @@
 description: Ultralytics YOLO11n-cls model trained on /content/dataset-ecosort-split
 author: Ultralytics
-date: '2026-10-06T14:16:58.004683+00:00'
-version: 8.4.173
+date: '2026-10-09T21:13:57.127112+00:00'
+version: 8.4.175
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com
 stride: 1
