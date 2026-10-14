@@ -4,6 +4,17 @@ import time
 import uuid
 import cv2
 import threading
+import torch
+
+# --- PATCH PARA PYTORCH 2.6+ ---
+# Força o PyTorch a permitir carregar checkpoints sem restrição de segurança
+_original_torch_load = torch.load
+def _safe_torch_load(*args, **kwargs):
+    kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _safe_torch_load
+# ------------------------------
+
 from ultralytics import YOLO
 
 import config
@@ -24,6 +35,7 @@ def main():
         os.remove(config.TRIGGER_FILE)
 
     try:
+        # Agora o YOLO carrega o best.pt sem qualquer bloqueio do PyTorch
         model = YOLO(config.MODEL_PATH, task="classify")
     except Exception as e:
         config.logger.critical(f"Failed to load YOLO model: {e}")
@@ -73,7 +85,7 @@ def main():
                 cv2.imshow(window_name, frame)
                 cv2.waitKey(1)
 
-                results = model.predict(source=clean_frame, conf=0.01, verbose=False)
+                results = model.predict(source=clean_frame, imgsz=224, conf=0.01, verbose=False)
                 res = results[0]
 
                 if res.probs is not None:

@@ -25,7 +25,7 @@ R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 
 # --- MODEL & CAMERA ---
-MODEL_PATH = os.getenv("MODEL_PATH", "best_ncnn_model")
+MODEL_PATH = os.getenv("MODEL_PATH", "best.pt")
 MODEL_VERSION = os.getenv("MODEL_VERSION", "v1.3.0")
 camera_env = os.getenv("CAMERA_SOURCE", "0")
 CAMERA_SOURCE = int(camera_env) if camera_env.isdigit() else camera_env
