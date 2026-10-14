@@ -6,17 +6,17 @@ logger = logging.getLogger(__name__)
 # --- CONFIG ---
 CANAL_SERVO_X = 0
 CANAL_SERVO_Y = 1
-POSICAO_REPOUSO = (60.0, 128.0)
+POSICAO_REPOUSO = (140.0, 132.0)
 
 CLASS_TO_TILT = {
-    "metal":       (95.0, 95.0),   # Superior Esquerdo
-    "plastic":     (25.0, 95.0),   # Superior Direito
-    "paper":       (25.0, 166.0),  # Inferior Esquerdo
-    "cardboard":   (25.0, 166.0),  # Inferior Esquerdo
-    "glass":       (95.0, 166.0),  # Inferior Direito
-    "brown-glass": (95.0, 166.0),  # Inferior Direito
-    "green-glass": (95.0, 166.0),  # Inferior Direito
-    "white-glass": (95.0, 166.0),  # Inferior Direito
+    "metal":       (175.0, 170.0),   # Superior Esquerdo
+    "plastic":     (105.0, 170.0),   # Superior Direito
+    "paper":       (105.0, 90.0),    # Inferior Esquerdo
+    "cardboard":   (105.0, 90.0),    # Inferior Esquerdo
+    "glass":       (175.0, 92.0),    # Inferior Direito
+    "brown-glass": (175.0, 92.0),    # Inferior Direito
+    "green-glass": (175.0, 92.0),    # Inferior Direito
+    "white-glass": (175.0, 92.0),    # Inferior Direito
     "reject":      POSICAO_REPOUSO,
     "unsure":      POSICAO_REPOUSO
 }
@@ -26,27 +26,27 @@ class Mechatronics:
         self.pca = None
         self.servo_x = None
         self.servo_y = None
-        
+
         try:
             import board
             import busio
             from adafruit_pca9685 import PCA9685
             from adafruit_motor import servo
-            
+
             logger.info("Iniciando hardware PCA9685 via I2C...")
             i2c = busio.I2C(board.SCL, board.SDA)
             self.pca = PCA9685(i2c)
             self.pca.frequency = 50
-            
+
             self.servo_x = servo.Servo(self.pca.channels[CANAL_SERVO_X], min_pulse=500, max_pulse=2500, actuation_range=180)
             self.servo_y = servo.Servo(self.pca.channels[CANAL_SERVO_Y], min_pulse=500, max_pulse=2500, actuation_range=180)
-            
+
             self.servo_x.angle = POSICAO_REPOUSO[0]
             self.servo_y.angle = POSICAO_REPOUSO[1]
             time.sleep(1.0)
             self.reset_servos()
             logger.info("Mecatrônica pronta e alinhada.")
-            
+
         except Exception as e:
             logger.warning(f"Hardware mecatrônico não encontrado/desativado. Rodando apenas software. Erro: {e}")
 
@@ -71,23 +71,23 @@ class Mechatronics:
             return
 
         logger.info(f"Despejando {alvo.upper()} -> Base X:{ang_x}° | Caçamba Y:{ang_y}°")
-        
+
         # 1. Gira apenas a base (X) para a direção correta mantendo o prato nivelado
         self.servo_x.angle = ang_x
         time.sleep(0.6) # Tempo para a base terminar de girar
-        
+
         # 2. Inclina a caçamba (Y) para derrubar o lixo
         self.servo_y.angle = ang_y
         time.sleep(2.0) # Tempo para o lixo escorregar
-        
+
         logger.info("Retornando ao repouso.")
         # 3. Retorna a caçamba para o nível horizontal (Y) PRIMEIRO
         self.servo_y.angle = POSICAO_REPOUSO[1]
         time.sleep(0.6)
-        
+
         # 4. Retorna a base para a posição central (X) DEPOIS
         self.servo_x.angle = POSICAO_REPOUSO[0]
         time.sleep(0.6)
-        
+
         # 5. Relaxa os motores
         self.reset_servos()
