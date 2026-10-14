@@ -13,3 +13,4 @@ psutil
 Adafruit-Blinka
 adafruit-circuitpython-pca9685
 adafruit-circuitpython-motor
+rpi-lgpio
