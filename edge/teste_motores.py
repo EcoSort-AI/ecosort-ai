@@ -23,8 +23,8 @@ try:
     servo_y = servo.Servo(pca.channels[CANAL_SERVO_Y], min_pulse=500, max_pulse=2500, actuation_range=180)
 
     print("Movendo para a posição de REPOUSO (140°, 130°)...")
-    servo_x.angle = 140
-    servo_y.angle = 130
+    servo_x.angle = 88
+    servo_y.angle = 132
 
     # Aguarda 1 segundo e corta o sinal (detach) definindo o ângulo como None
     time.sleep(1.0)
