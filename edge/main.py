@@ -25,9 +25,9 @@ from mechatronics import Mechatronics
 
 # --- CONFIGURAÇÕES DO SENSOR AUTO-TRIGGER ---
 AUTO_TRIGGER_ENABLED = os.getenv("AUTO_TRIGGER", "true").lower() == "true"
-PRESENCE_THRESHOLD = 25       # Sensibilidade de diferença contra o prato vazio (0 a 255)
-MIN_OBJECT_AREA = 10000       # Área mínima (pixels na ROI) para confirmar que há um objeto no prato
-MOTION_SETTLE_THRESHOLD = 30  # Tolerância a variações de luz/reflexo entre frames seguidos
+PRESENCE_THRESHOLD = 45      # Sensibilidade de diferença contra o prato vazio (0 a 255)
+MIN_OBJECT_AREA = 16000       # Área mínima (pixels na ROI) para confirmar que há um objeto no prato
+MOTION_SETTLE_THRESHOLD = 40  # Tolerância a variações de luz/reflexo entre frames seguidos
 MAX_MOTION_AREA = 12000       # Permite pequenas oscilações do objeto sem zerar o timer
 STABILIZATION_TIME = 1.5      # Segundos que o objeto precisa ficar sem movimento brusco
 MAX_WAIT_FOR_SETTLE = 3.0     # Timeout: se o objeto continuar oscilando após 3s no prato, classifica mesmo assim!

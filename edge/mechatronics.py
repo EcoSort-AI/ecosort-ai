@@ -6,17 +6,17 @@ logger = logging.getLogger(__name__)
 # --- CONFIG ---
 CANAL_SERVO_X = 0
 CANAL_SERVO_Y = 1
-POSICAO_REPOUSO = (88.0, 132.0)
+POSICAO_REPOUSO = (88.0, 134.0)
 
 CLASS_TO_TILT = {
     "metal":       (123.0, 170.0),   # Superior Esquerdo
     "plastic":     (53.0, 170.0),    # Superior Direito
-    "paper":       (53.0, 90.0),     # Inferior Esquerdo
-    "cardboard":   (53.0, 90.0),     # Inferior Esquerdo
-    "glass":       (123.0, 92.0),    # Inferior Direito
-    "brown-glass": (123.0, 92.0),    # Inferior Direito
-    "green-glass": (123.0, 92.0),    # Inferior Direito
-    "white-glass": (123.0, 92.0),    # Inferior Direito
+    "paper":       (53.0, 96.0),     # Inferior Esquerdo
+    "cardboard":   (53.0, 96.0),     # Inferior Esquerdo
+    "glass":       (123.0, 96.0),    # Inferior Direito
+    "brown-glass": (123.0, 96.0),    # Inferior Direito
+    "green-glass": (123.0, 96.0),    # Inferior Direito
+    "white-glass": (123.0, 96.0),    # Inferior Direito
     "reject":      POSICAO_REPOUSO,
     "unsure":      POSICAO_REPOUSO
 }
